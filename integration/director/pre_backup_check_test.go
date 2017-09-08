@@ -50,7 +50,7 @@ var _ = Describe("Pre-backup checks", func() {
 				directorInstance = testcluster.NewInstance()
 				directorInstance.CreateUser("foobar", readFile(pathToPublicKeyFile))
 				By("creating a dummy backup script")
-				directorInstance.CreateScript("/var/vcap/jobs/redis/bin/bbr/backup", `#!/usr/bin/env sh
+				directorInstance.CreateScript("/var/vcap/jobs/uaa/bin/bbr/backup", `#!/usr/bin/env sh
 set -u
 printf "backupcontent1" > $BBR_ARTIFACT_DIRECTORY/backupdump1
 printf "backupcontent2" > $BBR_ARTIFACT_DIRECTORY/backupdump2
@@ -88,6 +88,42 @@ printf "backupcontent2" > $BBR_ARTIFACT_DIRECTORY/backupdump2
 					Expect(directorInstance.FileExists("/var/vcap/store/bbr-backup")).To(BeTrue())
 				})
 			})
+
+			Context("and there is a metadata script", func() {
+				BeforeEach(func() {
+
+					directorInstance.CreateScript("/var/vcap/jobs/uaa/bin/bbr/pre-backup-lock",
+						`#!/usr/bin/env sh
+touch /tmp/uaa-pre-backup-lock-called
+exit 0`)
+					directorInstance.CreateScript("/var/vcap/jobs/uaa/bin/bbr/metadata",
+						`#!/usr/bin/env sh
+echo "---
+should_be_locked_before:
+- job_name: postgres
+  release: bosh
+"`)
+				})
+
+				FIt("throws a helpful error", func() {
+					By("returns exit code 1", func() {
+						Expect(session.ExitCode()).To(Equal(1))
+					})
+
+					By("prints an error", func() {
+						Expect(string(session.Out.Contents())).To(ContainSubstring("Director cannot be backed up."))
+						directorHost := directorInstance.IP()
+						Expect(string(session.Err.Contents())).To(ContainSubstring(
+							fmt.Sprintf(
+								"Deployment '%s' contains a bbr metadata script %s",
+								directorHost,
+								"/var/vcap/jobs/uaa/bin/bbr/metadata")))
+					})
+					By("not printing the stack trace to stderr", func() {
+						Expect(string(session.Err.Contents())).NotTo(ContainSubstring("main.go"))
+					})
+				})
+			})
 		})
 
 		Context("if there are no backup scripts", func() {
@@ -98,7 +134,7 @@ printf "backupcontent2" > $BBR_ARTIFACT_DIRECTORY/backupdump2
 				directorInstance.CreateUser("foobar", readFile(pathToPublicKeyFile))
 
 				directorInstance.CreateExecutableFiles(
-					"/var/vcap/jobs/redis/bin/not-a-backup-script",
+					"/var/vcap/jobs/uaa/bin/not-a-backup-script",
 				)
 				directorAddress = directorInstance.Address()
 			})
@@ -106,6 +142,8 @@ printf "backupcontent2" > $BBR_ARTIFACT_DIRECTORY/backupdump2
 			AfterEach(func() {
 				directorInstance.DieInBackground()
 			})
+
+			//TODO: change it to by
 
 			It("returns exit code 1", func() {
 				Expect(session.ExitCode()).To(Equal(1))
